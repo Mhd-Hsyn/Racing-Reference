@@ -1,0 +1,17 @@
+version: '3'
+services:
+  my-mongodb:
+    image: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=neuro-gpt
+      - DATASTORE_HOST=localhost
+      - DATASTORE_PORT=27017
+      - DATASTORE_TIMEOUT=500
+
+volumes:
+  mongodb:

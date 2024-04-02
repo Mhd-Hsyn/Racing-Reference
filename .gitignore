@@ -1,0 +1,11 @@
+.env
+__pycache__/
+database/mongodb_data/
+_1_driver_names_script/
+driver_1st_tables_Script/
+driver_2nd_inner_Races_Statics_Script/
+drives_data/
+merged/
+MY_ALL_3_Tables_folder/
+Races/
+Races_old/
