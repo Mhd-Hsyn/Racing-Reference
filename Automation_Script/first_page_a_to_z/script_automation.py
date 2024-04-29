@@ -29,28 +29,22 @@ def get_random_headers():
     return headers
 
 
-def scrap_first_page(options):
-    driver = None
+def get_chromedrvier_options():
+    headers = get_random_headers()
+    print(headers)
+    # Set Chrome options
+    options = Options()
+    options.headless = True
+    options.add_argument("--enable-logging")
+    options.add_argument("--log-level=0")
+    # options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3')
+    options.add_argument(f'user-agent={headers["User-Agent"]}')
+    options.add_argument("--no-sandbox")
+    return options
+
+
+def scrap_first_page():
     try:
-        print(
-            "\n\n ****** Starting 1st page missing drivers name........ ******** \n\n"
-        )
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-        driver.get("https://www.racing-reference.info/active-drivers/")
-        time.sleep(5)
-
-        try:
-            cookie_consent = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//button[text()='I Accept']")
-                )
-            )
-            cookie_consent.click()
-        except Exception as e:
-            print("Error handling cookie consent:", str(e))
-
-        time.sleep(2)
-
         current_directory = os.getcwd()
         file_path = os.path.join(
             current_directory,
@@ -67,13 +61,30 @@ def scrap_first_page(options):
                 f"https://www.racing-reference.info/driver-list/?ltr={chr(letter)}"
             )
             # Open the link for the current letter
-            driver.get(letter_link)
-            time.sleep(2)
+            table = None
+            myretry= True
+            while myretry:
+                try:
+                    options = get_chromedrvier_options()
+                    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+                    driver.get(letter_link)
+                    time.sleep(2)
 
-            html_content = driver.page_source
-            if html_content:
-                soup = BeautifulSoup(html_content, "html.parser")
-                table = soup.find("table", class_="tb")
+                    html_content = driver.page_source
+                    if html_content:
+                        soup = BeautifulSoup(html_content, "html.parser")
+                        table = soup.find("table", class_="tb")
+                        if table:
+                            myretry= False
+                        if not table:
+                            print('\n__________ RETRY BECAUSE DRIVER CRASH __________')
+                except:
+                    myretry= True
+                finally:
+                    print("QUIT WEB DRIVER ______________")
+                    if driver:
+                        driver.quit()
+            
                 if table:
                     # Find all rows with class 'even' or 'odd'
                     rows = table.find_all("tr", class_=["even", "odd"])
@@ -91,7 +102,7 @@ def scrap_first_page(options):
                     ]
 
                     for index, row in enumerate(rows, start=1):
-                        # if index > 1 or index <= 0:
+                        # if index > 2 or index <= 0:
                         #     continue
                         # Extract driver name and link from the first column
                         driver_col = row.find("td", class_="col")
@@ -166,23 +177,10 @@ def scrap_first_page(options):
                 "No new riders in the website thats why all previous riders remove from new_data_first_page.csv"
             )
 
-    finally:
-        print("QUIT WEB DRIVER ______________")
-        if driver:
-            driver.quit()
+    except Exception as e:
+        print(e)
 
 
 
 def sysInit():
-    headers = get_random_headers()
-    print(headers)
-
-    # Set Chrome options
-    options = Options()
-    options.headless = True
-    options.add_argument("--enable-logging")
-    options.add_argument("--log-level=0")
-    # options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3')
-    options.add_argument(f'user-agent={headers["User-Agent"]}')
-    options.add_argument("--no-sandbox")
-    scrap_first_page(options)
+    scrap_first_page()
