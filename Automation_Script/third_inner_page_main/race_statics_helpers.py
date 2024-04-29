@@ -41,7 +41,7 @@ def extract_stats_meta_info(html_content):
     if additional_table:
         # Extract data from div class="row1"
         row1_data = [
-            item.text.strip() for item in additional_table.select(".row1 span")
+            item.text.strip() for item in additional_table.select(".row1 span") if item and item.text
         ]
 
         # Extract data from div class="row2" to end
@@ -53,34 +53,32 @@ def extract_stats_meta_info(html_content):
             if label_span and value_span:
                 label_text = label_span.text.strip().replace(
                     ":", ""
-                )  # Remove colons from column names
-                value_text = value_span.text.strip()
+                ) if label_span.text else "" # Remove colons from column names
+                value_text = value_span.text.strip() if value_span.text else "" 
                 row_data[label_text] = value_text
 
         # Extract specific values not covered by span class
-        average_start = soup.select_one(
-            '.row2 span.label:contains("Average start:") + span.value'
-        ).text.strip()
-        average_finish = soup.select_one(
-            '.row3 span.label:contains("Average finish:") + span.value'
-        ).text.strip()
-        total_winnings = soup.select_one(
-            '.row2 span.label:contains("Total Winnings:") + span.value'
-        ).text.strip()
+        average_start = soup.select_one('.row2 span.label:contains("Average start:") + span.value')
+        if average_start:
+            average_start= average_start.text.strip() if average_start.text else "" 
+        average_finish = soup.select_one('.row3 span.label:contains("Average finish:") + span.value')
+        if average_finish:
+            average_finish= average_finish.text.strip() if average_finish.text else ""
+        total_winnings = soup.select_one('.row2 span.label:contains("Total Winnings:") + span.value')
+        if total_winnings:
+            total_winnings= total_winnings.text.strip() if total_winnings.text else ""
 
         # Check if the element exists before accessing its text attribute
-        excluding_bonuses_elem = soup.select_one(
-            '.row3 span.label:contains("(excluding bonuses)") + span.value'
-        )
-        excluding_bonuses = (
-            excluding_bonuses_elem.text.strip() if excluding_bonuses_elem else None
-        )
+        excluding_bonuses_elem = soup.select_one('.row3 span.label:contains("(excluding bonuses)") + span.value')
+        excluding_bonuses = ""
+        if excluding_bonuses_elem:
+            excluding_bonuses = (excluding_bonuses_elem.text.strip() if excluding_bonuses_elem and excluding_bonuses_elem.text else None)
 
         # Add these values to the row_data dictionary
-        row_data["Average start"] = average_start
-        row_data["Average finish"] = average_finish
-        row_data["Total Winnings"] = total_winnings
-        row_data["(excluding bonuses)"] = excluding_bonuses
+        row_data["Average start"] = average_start if average_start else ""
+        row_data["Average finish"] = average_finish if average_finish else ""
+        row_data["Total Winnings"] = total_winnings if total_winnings else ""
+        row_data["(excluding bonuses)"] = excluding_bonuses if excluding_bonuses else ""
 
         # Create a DataFrame for row1_data
         df_row1 = pd.DataFrame([row1_data], columns=["Column 1", "Column 2"])
@@ -153,7 +151,7 @@ def save_race_statics(html_content, driver_name, table_name, race_name):
 
     for i, table in enumerate(tables):
         rows = table.find_all("tr")
-        headers = [th.text.strip() for th in rows[0].find_all("th")]
+        headers = [th.text.strip() for th in rows[0].find_all("th") if th and th.text]
         data = []
 
         for row in rows[1:]:
@@ -163,7 +161,8 @@ def save_race_statics(html_content, driver_name, table_name, race_name):
                 # Check if the cell has colspan="3"
                 colspan = cell.get("colspan", "1")
                 # Add the text content of the cell
-                values.append(cell.text.strip())
+                inner_cell_text= cell.text.strip() if cell and cell.text else ""
+                values.append(inner_cell_text)
 
                 # Add empty values based on colspan
                 for _ in range(int(colspan) - 1):
