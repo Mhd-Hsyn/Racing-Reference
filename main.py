@@ -1,3 +1,4 @@
+import re
 from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from pymongo import MongoClient
@@ -342,12 +343,195 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-@app.get("/api/get-drivers-data-all/", response_class=JSONResponse)
+def convert_objectid(obj):
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
+
+
+class CustomsJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        return super().default(obj)
+
+@app.get("/api/get-drivers-data-all/")
 async def get_drivers_data():
     records = list(driver_collection.find().sort([("_id", -1)]))
-    records_json = json.dumps({"records": records}, cls=CustomJSONEncoder, indent=2)
-    drivers_data = json.loads(records_json)
-    return drivers_data
+
+    # Preprocess records: Replace NaN with None
+    for record in records:
+        for key, value in record.items():
+            if isinstance(value, float) and np.isnan(value):
+                record[key] = None
+
+    # Convert ObjectId and datetime to serializable format
+    serialized_records = json.dumps({"records": records}, default=convert_objectid)
+    return JSONResponse(content=json.loads(serialized_records))
+
+
+
+
+@app.get("/search_driver/")
+async def search_driver(
+    driver: str = Query(None),
+    born: str = Query(None),
+    died: str = Query(None),
+    home: str = Query(None),
+    db: MongoClient = Depends(get_database),
+):
+    query = {}
+
+    # Add search parameters to the query if they are provided
+    if driver:
+        # Clean the driver name from special characters
+        cleaned_driver_name = re.sub(r'\W+', '', driver.lower())
+
+        # Query MongoDB to find matching drivers
+        cursor = db["drivers"].find({}, {"Driver": 1})
+        matching_drivers = []
+
+        for document in cursor:
+            driver_db = document["Driver"]
+            # Clean the driver name from the database for comparison
+            cleaned_db_driver_name = re.sub(r'\W+', '', driver_db.lower())
+            # If the cleaned user input matches the cleaned DB entry, add to results
+            if cleaned_driver_name in cleaned_db_driver_name:
+                matching_drivers.append(driver_db)
+
+        query["Driver"] = {"$in": matching_drivers}
+
+    if born:
+        regex_born = re.compile(born, re.IGNORECASE)
+        query["Born"] = {"$regex": regex_born}
+    if died:
+        regex_died = re.compile(died, re.IGNORECASE)
+        query["Died"] = {"$regex": regex_died}
+    if home:
+        home_regex = re.compile(home, re.IGNORECASE)
+        query["Home"] = {"$regex": home_regex}
+
+    # Execute the query
+    projection = {"_id": 0}
+    result = list(driver_collection.find(query, projection))
+    # Preprocess records: Replace NaN with None
+    for record in result:
+        for key, value in record.items():
+            if isinstance(value, float) and np.isnan(value):
+                record[key] = None
+
+    # Convert ObjectId and datetime to serializable format
+    serialized_records = json.dumps({"records": result}, default=convert_objectid)
+    return JSONResponse(content=json.loads(serialized_records))
+
+
+#### FROM DATABASE
+# from urllib.parse import urlencode
+# @app.get("/get-drivers-data-all/")
+# async def get_drivers_data(page: int = Query(1, gt=0)):
+#     # Constant page size
+#     page_size = 100
+
+#     # Calculate skip value based on page number and constant page size
+#     skip = (page - 1) * page_size
+
+#     # Query total count of records
+#     total_count = driver_collection.count_documents({})
+
+#     # Query records from the database with pagination
+#     records = list(driver_collection.find().sort([("_id", -1)]).skip(skip).limit(page_size))
+
+#     # Preprocess records: Replace NaN with None
+#     for record in records:
+#         for key, value in record.items():
+#             if isinstance(value, float) and np.isnan(value):
+#                 record[key] = None
+
+#     # Calculate previous and next page numbers
+#     previous_page = page - 1 if page > 1 else None
+#     next_page = page + 1 if skip + page_size < total_count else None
+
+#     # Construct URLs for previous and next pages
+#     base_url = "/get-drivers-data-all/"
+#     query_params = {"page": None}
+#     previous_url = None
+#     next_url = None
+#     if previous_page is not None:
+#         query_params["page"] = previous_page
+#         previous_url = base_url + "?" + urlencode(query_params)
+#     if next_page is not None:
+#         query_params["page"] = next_page
+#         next_url = base_url + "?" + urlencode(query_params)
+
+#     # Prepare response data
+#     response_data = {
+#         "count": total_count,
+#         "next_url": next_url,
+#         "previous_url": previous_url,
+#         "records": json.loads(json.dumps(records, default=convert_objectid))
+#     }
+
+#     return response_data
+
+
+
+#### FROM CSV
+from urllib.parse import urlencode
+@app.get("/get-drivers-data-all/")
+async def get_drivers_data(page: int = Query(1, gt=0)):
+    if not page:
+        page=1
+
+    df = pd.read_csv("first_page_all_data.csv")
+
+    page_size = 420
+
+    # Calculate skip value based on page number and constant page size
+    skip = (page - 1) * page_size
+
+    # Calculate total count of records
+    total_count = len(df)
+
+    # Check if skip is beyond the length of data
+    if skip >= total_count:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    # Get records for the current page
+    records = df.iloc[skip: skip + page_size]
+
+    # Replace NaN values with None (or any other JSON-compliant value)
+    records = records.where(pd.notnull(records), None)
+
+    # Convert DataFrame records to dictionary format
+    records_dict = records.to_dict(orient="records")
+
+    # Calculate previous and next page numbers
+    previous_page = page - 1 if page > 1 else None
+    next_page = page + 1 if skip + page_size < total_count else None
+
+    # Construct URLs for previous and next pages
+    base_url = "/get-drivers-data-all/"
+    query_params = {"page": None}
+    previous_url = None
+    next_url = None
+    if previous_page is not None:
+        query_params["page"] = previous_page
+        previous_url = base_url + "?" + urlencode(query_params)
+    if next_page is not None:
+        query_params["page"] = next_page
+        next_url = base_url + "?" + urlencode(query_params)
+
+    # Prepare response data
+    response_data = {
+        "count": total_count,
+        "next_url": next_url,
+        "previous_url": previous_url,
+        "records": records_dict
+    }
+
+    return response_data
 
 
 @app.get("/api/get_rider/{uuid}")
@@ -435,6 +619,31 @@ async def match_names():
 async def get_rider_data(UUID: str, db: MongoClient = Depends(get_database)):
     try:
         print(f"Requested UUID: {UUID}")
+        rider_fullinfo = db["drivers"].find(
+            {"UUID": UUID},
+            {"_id": 0, "created_at": 0}
+        )
+        rider_fullinfo_list= list (rider_fullinfo)
+        print("rider_info_cursor ______________ ", rider_fullinfo_list )
+
+        for doc in rider_fullinfo_list:
+            for key, value in doc.items():
+                if isinstance(value, float) and math.isnan(value):
+                    doc[key] = None
+
+        # Filter and format the documents
+        filtered_rider_fullinfo_list = []
+        for doc in rider_fullinfo_list:
+            filtered_doc = {
+                "Driver": doc.get("Driver"),
+                "Born": doc.get("Born"),
+                "Died": doc.get("Died"),
+                "Home": doc.get("Home"),
+                "Rider_Country_Img": doc.get("Rider_Country_Img"),
+                "UUID": doc.get("UUID"),
+                "rider_image": doc.get("rider_image")  # Assuming rider_image is a field in the document
+            }
+            filtered_rider_fullinfo_list.append(filtered_doc)
 
         rider_info_cursor = db["driver_table_page_1"].find({"UUID": UUID})
 
@@ -464,7 +673,8 @@ async def get_rider_data(UUID: str, db: MongoClient = Depends(get_database)):
                     }
                 )
 
-            return rider_data_list
+            # return rider_data_list
+            return {"driver_info": filtered_rider_fullinfo_list[0], "all_data":rider_data_list}
         else:
             raise HTTPException(
                 status_code=404, detail="Rider not found with the given UUID"
@@ -994,60 +1204,62 @@ def convert_to_json_compliants(value, seen=None):
         return value
 
 
-@app.get("/get-drivers-data-all/", response_class=JSONResponse)
-async def get_driver_data():
-    driver_names_cursor = db["driver_table_page_1"].distinct("UUID")
-    driver_names = [
-        {"Driver": driver_name.strip()} for driver_name in driver_names_cursor
-    ]
+# @app.get("/get-drivers-data-all/", response_class=JSONResponse)
+# async def get_driver_data():
+#     driver_names_cursor = db["driver_table_page_1"].distinct("UUID")
+#     driver_names = [
+#         {"Driver": driver_name.strip()} for driver_name in driver_names_cursor
+#     ]
 
-    detailed_driver_info = []
-    for driver_info in driver_names:
-        driver_name = driver_info["Driver"]
-        driver_details = db["drivers"].find_one({"UUID": driver_name})
+#     detailed_driver_info = []
+#     for driver_info in driver_names:
+#         driver_name = driver_info["Driver"]
+#         driver_details = db["drivers"].find_one({"UUID": driver_name})
 
-        if driver_details:
-            print(f"Details found for driver: {driver_name}")
-            for key, value in driver_details.items():
-                driver_details[key] = convert_to_json_compliants(value)
+#         if driver_details:
+#             print(f"Details found for driver: {driver_name}")
+#             for key, value in driver_details.items():
+#                 driver_details[key] = convert_to_json_compliants(value)
 
-            detailed_driver_info.append(driver_details)
-        else:
-            print(f"No details found for driver: {driver_name}")
+#             detailed_driver_info.append(driver_details)
+#         else:
+#             print(f"No details found for driver: {driver_name}")
 
-    print("Detailed Driver Info:", detailed_driver_info)
+#     print("Detailed Driver Info:", detailed_driver_info)
 
-    detailed_driver_info_sorted = sorted(
-        detailed_driver_info,
-        key=lambda x: x.get("created_at", datetime.min),
-        reverse=True,
-    )
+#     detailed_driver_info_sorted = sorted(
+#         detailed_driver_info,
+#         key=lambda x: x.get("created_at", datetime.min),
+#         reverse=True,
+#     )
 
-    print("Sorted Detailed Driver Info:", detailed_driver_info_sorted)
+#     print("Sorted Detailed Driver Info:", detailed_driver_info_sorted)
 
-    file_path = "MY_ALL_3_Tables_folder/1st_page_a_to_z/merged_all.csv"
-    df = pd.read_csv(file_path)
-    scrap_record = df["Driver"][:80]
+#     # file_path = "MY_ALL_3_Tables_folder/1st_page_a_to_z/merged_all.csv"
+#     file_path = "Automation_Script/first_page_a_to_z/first_page_all_data.csv"
 
-    scrap_list = []
+#     df = pd.read_csv(file_path)
+#     scrap_record = df["Driver"][:80]
 
-    for driver_name in scrap_record:
-        for driver_info in detailed_driver_info_sorted:
-            if driver_info["Driver"] == driver_name:
-                driver_info_cleaned = {
-                    k: "" if v == "nan" else v for k, v in driver_info.items()
-                }
-                driver_info_cleaned = {
-                    k: "" if pd.isna(v) else v for k, v in driver_info_cleaned.items()
-                }
-                scrap_list.append(driver_info_cleaned)
+#     scrap_list = []
 
-    scrap_list = scrap_list[::-1]
+#     for driver_name in scrap_record:
+#         for driver_info in detailed_driver_info_sorted:
+#             if driver_info["Driver"] == driver_name:
+#                 driver_info_cleaned = {
+#                     k: "" if v == "nan" else v for k, v in driver_info.items()
+#                 }
+#                 driver_info_cleaned = {
+#                     k: "" if pd.isna(v) else v for k, v in driver_info_cleaned.items()
+#                 }
+#                 scrap_list.append(driver_info_cleaned)
 
-    records_json = json.dumps({"records": scrap_list}, cls=CustomJSONssssEncoder)
+#     scrap_list = scrap_list[::-1]
 
-    drivers_data = json.loads(records_json)
-    return drivers_data
+#     records_json = json.dumps({"records": scrap_list}, cls=CustomJSONssssEncoder)
+
+#     drivers_data = json.loads(records_json)
+#     return drivers_data
 
 
 def get_object_id(driver_id: str = Path(...)):
@@ -1709,78 +1921,90 @@ def automation_insert_rider_second_page_data(FOLDER_PATH):
         name = driver_name.replace(" ", "_").replace(".", "_").replace(",", "")
         folder_name = f"{my_UUID}___{name}"
         print("folder_name-------", folder_name)
-        folder_to_open = os.path.join(FOLDER_PATH, folder_name)
-        subprocess.run(["explorer", folder_to_open], shell=True)  # For Windows
-        print("folder_to_open-------", folder_to_open)
 
-        csv_files = [
-            file for file in os.listdir(folder_to_open) if file.lower().endswith(".csv")
-        ]
+        try:
+            folder_to_open = os.path.join(FOLDER_PATH, folder_name)
+            subprocess.run(["explorer", folder_to_open], shell=True)  # For Windows
+            print("folder_to_open-------", folder_to_open)
 
-        for csv_file in csv_files:
-            csv_path = os.path.join(folder_to_open, csv_file)
-            df = pd.read_csv(csv_path)
+            csv_files = [
+                file for file in os.listdir(folder_to_open) if file.lower().endswith(".csv")
+            ]
 
-            riderss_collection = db["driver_table_page_1"]
-            data_to_insert = {
-                "UUID": UUID,
-                "Driver": driver_name,
-                "CSVFileName": csv_file,
-                "CSVData": df.to_dict(orient="records"),
-            }
-            for i in range(len(data_to_insert["CSVData"])):
-                if data_to_insert["CSVData"][i]:
-                    if data_to_insert["CSVData"][i].get("Race"):
-                        generated_uuid = str(uuid.uuid4())
-                        data_to_insert["CSVData"][i]["race_uuid"] = generated_uuid
+            for csv_file in csv_files:
+                csv_path = os.path.join(folder_to_open, csv_file)
+                df = pd.read_csv(csv_path)
 
-                    if data_to_insert["CSVData"][i].get("Races"):
-                        generated_uuid1 = str(uuid.uuid4())
-                        generated_uuid2 = str(uuid.uuid4())
-                        data_to_insert["CSVData"][i]["year_uuid"] = generated_uuid1
-                        data_to_insert["CSVData"][i]["races_uuid"] = generated_uuid2
-                    else:
-                        None
+                riderss_collection = db["driver_table_page_1"]
+                data_to_insert = {
+                    "UUID": UUID,
+                    "Driver": driver_name,
+                    "CSVFileName": csv_file,
+                    "CSVData": df.to_dict(orient="records"),
+                }
+                for i in range(len(data_to_insert["CSVData"])):
+                    if data_to_insert["CSVData"][i]:
+                        if data_to_insert["CSVData"][i].get("Race"):
+                            generated_uuid = str(uuid.uuid4())
+                            data_to_insert["CSVData"][i]["race_uuid"] = generated_uuid
 
-            riderss_collection.insert_one(data_to_insert)
+                        if data_to_insert["CSVData"][i].get("Races"):
+                            generated_uuid1 = str(uuid.uuid4())
+                            generated_uuid2 = str(uuid.uuid4())
+                            data_to_insert["CSVData"][i]["year_uuid"] = generated_uuid1
+                            data_to_insert["CSVData"][i]["races_uuid"] = generated_uuid2
+                        else:
+                            None
+
+                riderss_collection.insert_one(data_to_insert)
+
+        except FileNotFoundError as e:
+            print(f"Error running automation: {e}")
+            print("Folder not found. Continuing to the next driver.")
+            continue
 
 
 @app.post("/api/auto-upload-drivers-data/")
 async def automation(db: MongoClient = Depends(get_database)):
-    fist_page_script.sysInit()
-    file_path = "Automation_Script/first_page_a_to_z/new_data_first_page.csv"
-    response = automation_process_uploaded_file(file_path)
+        # print("\n\n***************** STARTING **************************\n\n")
+    # third_page_script.sysInit()
 
-    if (
-        response.status_code == 400
-        or response.status_code == 404
-        or response.status_code == 500
-    ):
-        return response
+    # fist_page_script.sysInit()
+    # file_path = "Automation_Script/first_page_a_to_z/new_data_first_page.csv"
+    # response = automation_process_uploaded_file(file_path)
 
-    elif response.status_code == 200:
-        second_page_script.sysInit()
-        FOLDER_PATH = (
-            "Automation_Script/second_page_driver_tables_Script/new_drivers_data/"
-        )
-        automation_insert_rider_second_page_data(FOLDER_PATH=FOLDER_PATH)
+    # if (
+    #     response.status_code == 400
+    #     or response.status_code == 404
+    #     or response.status_code == 500
+    # ):
+    #     return response
 
-        # For 3rd Page
+    # elif response.status_code == 200:
+        # second_page_script.sysInit()
+        # FOLDER_PATH = (
+        #     "Automation_Script/second_page_driver_tables_Script/new_drivers_data/"
+        # )
+        # automation_insert_rider_second_page_data(FOLDER_PATH=FOLDER_PATH)
+
+    #     # For 3rd Page
         third_page_script.sysInit()  # call scrapping script
-        rider_info_list = list(db["driver_table_page_1"].find())
-        # Process rider names if not already processed
-        if not RIDER_NAMES_PROCESSED:
-            automation_process_rider_race_names(db, rider_info_list)
-            time.sleep(5)
-            automation_process_rider_names(db, rider_info_list)
+        # rider_info_list = list(db["driver_table_page_1"].find())
 
-        return JSONResponse(
-            content={
-                "status": True,
-                "message": "Data of 1st, 2nd and 3rd page inserted successfully",
-            },
-            status_code=201,
-        )
+        # print("FIND THE driver_table_page_1")
+        # if not RIDER_NAMES_PROCESSED:
+        #     print("START 3RD PAGE ")
+        #     automation_process_rider_race_names(db, rider_info_list)
+        #     time.sleep(5)
+        #     automation_process_rider_names(db, rider_info_list)
+
+        # return JSONResponse(
+        #     content={
+        #         "status": True,
+        #         "message": "Data of 1st, 2nd and 3rd page inserted successfully",
+        #     },
+        #     status_code=201,
+        # )
 
 
 
@@ -3204,26 +3428,59 @@ async def get_track_innerdata(track_uuid: str, db: MongoClient = Depends(get_dat
         )
 
 
+
 @app.get("/get-multiple-rider-data/")
 async def get_rider_data(
     driver_name: str = Query(..., alias="driver_name"),
     db: MongoClient = Depends(get_database),
 ):
     try:
-        print(f"Requested Driver Name: {driver_name}")
+        # print(f"Requested Driver Name: {driver_name}")
 
-        # Modify the query to match the driver's name with a case-insensitive regex
-        rider_info_cursor = db["driver_table_page_1"].find(
-            {"Driver": {"$regex": f"^{driver_name}$", "$options": "i"}}
-        )
+        cleaned_driver_name = re.sub(r'\W+', '', (driver_name.lower()))
 
-        # Additional logging
-        print(f"Actual MongoDB query: {str(rider_info_cursor)}")
+        # Query MongoDB to find matching drivers
+        cursor = db["drivers"].find({}, {"Driver": 1})
+        matching_drivers = []
 
-        rider_info_list = list(rider_info_cursor)
-        print(f"Retrieved rider_info_list: {rider_info_list}")
+        for document in cursor:
+            driver = document["Driver"]
+            # Remove special characters from DB entry for comparison
+            cleaned_db_driver = re.sub(r'\W+', '', (driver.lower()))
+            # If the cleaned user input matches the cleaned DB entry, add to results
+            if cleaned_driver_name in cleaned_db_driver:
+                matching_drivers.append(driver)
 
-        if rider_info_list:
+        rider_fullinfo = db["drivers"].find({"Driver": {"$regex": matching_drivers[0], "$options": "i"}}, {"_id": 0, "created_at": 0})
+        
+        rider_fullinfo_list= list (rider_fullinfo)
+
+        for doc in rider_fullinfo_list:
+            for key, value in doc.items():
+                if isinstance(value, float) and math.isnan(value):
+                    doc[key] = None
+
+        # Filter and format the documents
+        filtered_rider_fullinfo_list = []
+        for doc in rider_fullinfo_list:
+            filtered_doc = {
+                "Driver": doc.get("Driver"),
+                "Born": doc.get("Born"),
+                "Died": doc.get("Died"),
+                "Home": doc.get("Home"),
+                "Rider_Country_Img": doc.get("Rider_Country_Img"),
+                "UUID": doc.get("UUID"),
+                "rider_image": doc.get("rider_image")  # Assuming rider_image is a field in the document
+            }
+            filtered_rider_fullinfo_list.append(filtered_doc)
+        # Convert the filtered list to JSON format
+
+        if filtered_rider_fullinfo_list:
+            rider_info_cursor = db["driver_table_page_1"].find(
+                {"UUID": filtered_rider_fullinfo_list[0]["UUID"]}
+            )
+            rider_info_list = list(rider_info_cursor)
+
             rider_data_list = []
             for rider_info in rider_info_list:
                 rider_name = rider_info.get("Driver", "")
@@ -3249,7 +3506,7 @@ async def get_rider_data(
                     }
                 )
 
-            return rider_data_list
+            return {"driver_info": filtered_rider_fullinfo_list[0], "all_data":rider_data_list}
         else:
             raise HTTPException(
                 status_code=404,
@@ -3261,4 +3518,4 @@ async def get_rider_data(
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=9002, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=9005, reload=True)
