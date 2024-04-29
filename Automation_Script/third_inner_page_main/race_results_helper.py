@@ -52,8 +52,8 @@ def extract_race_results_table_data(table):
             if imgs and a_tags:
                 cell_data = []
                 for img, a_tag in zip(imgs, a_tags):
-                    image_url = img.get("src").lstrip("//")
-                    a_text = a_tag.text.strip()
+                    image_url = img.get("src").lstrip("//") if img and img.get("src") else ""
+                    a_text = a_tag.text.strip() if a_tag and a_tag.text else ""
                     rider_name_img = [image_url, a_text]
                     cell_data.append(rider_name_img)
 
@@ -64,20 +64,73 @@ def extract_race_results_table_data(table):
                 a_tag = a_tags[0] if a_tags else None
 
                 if img:
-                    image_url = img.get("src").lstrip("//")
+                    image_url = img.get("src").lstrip("//") if img and img.get("src") else ""
                     if a_tag:
-                        a_text = a_tag.text.strip()
+                        a_text = a_tag.text.strip() if a_tag and a_tag.text else ""
                         rider_name_img = [image_url, a_text]
                         row_data.append(rider_name_img)
                     else:
                         row_data.append(image_url)
                 else:
-                    row_data.append(cell.text.strip())
+                    my_cell_text= cell.text.strip() if cell and cell.text else ""
+                    row_data.append(my_cell_text)
 
         table_data.append(row_data)
 
     return table_data
 
+
+# def extract_table_data(table):
+#     """
+#     2nd table
+#         Caution flag breakdown:
+#         Lap leader breakdown:
+
+#     This method is for the below tables
+#     ( heading plus + table data)
+#     in this table The table heading is mentioned in the table in td tag with class name "newhead"
+#     fetch table name seprately and render the table and and dataframe of the table
+#     """
+
+#     skip_conditions = [
+#         "NASCAR® and its marks are trademarks",
+#         "Links for this race (some data may be unavailable):",
+#     ]
+
+#     # Skip the table if it contains any of the specific text
+#     if any(condition in table.text for condition in skip_conditions):
+#         return []
+
+#     table_data = []
+#     rows = table.find_all("tr")
+
+#     # Check if the table has a heading row with class "newhead"
+#     heading_row = rows[0]
+#     heading_cell = heading_row.find("td", class_="newhead")
+#     heading = heading_cell.text.strip() if heading_cell else ""
+#     if heading:
+#         for row in rows[1:]:
+#             cells = row.find_all(["td", "th"])
+#             row_data = []
+
+#             for cell in cells:
+#                 # Check if the cell contains an image (img tag)
+#                 img = cell.find("img")
+#                 text_content = cell.text.strip() if cell else ""
+#                 if img:
+#                     # If an image is present, fetch the URL from the 'src' attribute
+#                     image_url = img.get("src").lstrip("//")
+#                     row_data.append(f"{image_url}, {text_content}")
+#                 else:
+#                     # If no image, fetch the text content
+#                     row_data.append(text_content)
+
+#             table_data.append(row_data)
+
+#     other_table_data = pd.DataFrame(table_data)
+#     other_table_data.reset_index(drop=True, inplace=True)
+
+#     return heading, other_table_data
 
 def extract_table_data(table):
     """
@@ -101,34 +154,60 @@ def extract_table_data(table):
         return []
 
     table_data = []
+    other_table_data = []
     rows = table.find_all("tr")
 
     # Check if the table has a heading row with class "newhead"
     heading_row = rows[0]
     heading_cell = heading_row.find("td", class_="newhead")
-    heading = heading_cell.text.strip() if heading_cell else None
+    heading = heading_cell.text.strip() if heading_cell and heading_cell.text else ""
+    if heading:
+        for row in rows[1:]:
+            cells = row.find_all(["td", "th"])
+            row_data = []
+            if cells:
+                for cell in cells:
+                    # Check if the cell contains an image (img tag)
+                    img = cell.find("img")
+                    text_content = cell.text.strip() if cell and cell.text else ""
+                    if img:
+                        # If an image is present, fetch the URL from the 'src' attribute
+                        image_url = img.get("src").lstrip("//") if img and img.get("src") else ""
+                        row_data.append(f"{image_url}, {text_content}")
+                    else:
+                        # If no image, fetch the text content
+                        row_data.append(text_content)
 
-    for row in rows[1:]:
-        cells = row.find_all(["td", "th"])
-        row_data = []
+                table_data.append(row_data)
+            other_table_data = pd.DataFrame(table_data)
+            other_table_data.reset_index(drop=True, inplace=True)
 
-        for cell in cells:
-            # Check if the cell contains an image (img tag)
-            img = cell.find("img")
-            text_content = cell.text.strip()
-            if img:
-                # If an image is present, fetch the URL from the 'src' attribute
-                image_url = img.get("src").lstrip("//")
-                row_data.append(f"{image_url}, {text_content}")
-            else:
-                # If no image, fetch the text content
-                row_data.append(text_content)
+    else:
+        table_data = []
+        heading_cell = heading_row.find("th", class_="newhead")
+        heading = heading_cell.text.strip() if heading_cell and heading_cell.text else ""
+        if heading:
+            heading= heading.replace(":","")
+            row_data = []
+            table_data.append(heading)
+            for row in rows:
+                cells = row.find_all("td")
+                if cells:
+                  for cell in cells:
+                      # Check if the cell contains an image (img tag)
+                      text_content = cell.text.strip() if cell and cell.text else ""
+                      print(text_content)
+                      row_data.append(text_content)
+                  table_data.extend(row_data)
 
-        table_data.append(row_data)
-    other_table_data = pd.DataFrame(table_data)
-    other_table_data.reset_index(drop=True, inplace=True)
+            other_table_data = pd.DataFrame(table_data)
+            other_table_data.reset_index(drop=True, inplace=True)
+            heading = "Fastest Lap" if heading == "Race notes" else heading
 
+    print("\nHEADING IS ", heading)
+    print("\n DF is\n", other_table_data)
     return heading, other_table_data
+
 
 
 """
