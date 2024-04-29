@@ -27,6 +27,19 @@ def get_random_headers():
     return headers
 
 
+def get_chromedrvier_options():
+    headers = get_random_headers()
+    print(headers)
+    # Set Chrome options
+    options = Options()
+    options.headless = True
+    options.add_argument("--enable-logging")
+    options.add_argument("--log-level=0")
+    # options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3')
+    options.add_argument(f'user-agent={headers["User-Agent"]}')
+    options.add_argument("--no-sandbox")
+    return options
+
 def delete_contents_of_directory(directory_path):
     try:
         # Iterate over all files and subdirectories in the given directory
@@ -43,29 +56,8 @@ def delete_contents_of_directory(directory_path):
         print(f"Error: {e}")
 
 
-def scrap_second_page(options):
-    driver = None
+def scrap_second_page():
     try:
-        print(
-            "\n\n\n\t ******  Starting 2nd page Driver Race and Races Table Script........ ***** \n\n"
-        )
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-        driver.get("https://www.racing-reference.info/active-drivers/")
-        time.sleep(5)
-        try:
-            cookie_consent = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//button[text()='I Accept']")
-                )
-            )
-            cookie_consent.click()
-        except Exception as e:
-            print("Error handling cookie consent:", str(e))
-
-        time.sleep(3)
-
-        ##############################################################################3
-
         count = 1
         current_directory = os.getcwd()
 
@@ -124,21 +116,33 @@ def scrap_second_page(options):
                     os.makedirs(new_rec_folder_path)
                 except FileExistsError:
                     pass
-
+                parent_table = None
                 retry = True
                 while retry:
-                    driver.get(driver_url)
-                    html_content = driver.page_source
+                    try:
+                        options = get_chromedrvier_options()
+                        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+                        driver.get(driver_url)
+                        html_content = driver.page_source
+                        if html_content:
+                            soup = BeautifulSoup(html_content, "html.parser")
+                            # Extracting table data
+                            parent_table = soup.find("table", class_="statsTbl")
+                            if parent_table:
+                                retry = False
+                            else :
+                                print(f"\n\n\n************** RETRY THE {driver_name} ________ {driver_url}")
+                                retry= True
+                        else:
+                            retry= True
+                    except:
+                        retry= True
+                    finally:
+                        print("QUIT WEB DRIVER ______________")
+                        if driver:
+                            driver.quit()
 
-                    if html_content:
-                        soup = BeautifulSoup(html_content, "html.parser")
-                        # Extracting table data
-                        parent_table = soup.find("table", class_="statsTbl")
-                        if parent_table:
-                            retry = False
-                        else :
-                            print(f"\n\n\n************** RETRY THE {driver_name} ________ {driver_url}")
-                            continue
+                    if parent_table:
                         child_tables = parent_table.find_all("table") if parent_table else []
                         h1_list = [
                             child_table.find("h1").text.strip()
@@ -188,22 +192,10 @@ def scrap_second_page(options):
                     else:
                         print("______________________problem ______________________")
                         print(f"Skipping {driver_name} due to failure in fetching HTML")
-    finally:
-        print("QUIT WEB DRIVER ______________")
-        if driver:
-            driver.quit()
+    except Exception as e:
+        print(e)
+
 
 
 def sysInit():
-    headers = get_random_headers()
-    print(headers)
-
-    # Set Chrome options
-    options = Options()
-    options.headless = True
-    options.add_argument("--enable-logging")
-    options.add_argument("--log-level=0")
-    # options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3')
-    options.add_argument(f'user-agent={headers["User-Agent"]}')
-    options.add_argument("--no-sandbox")
-    scrap_second_page(options)
+    scrap_second_page()
